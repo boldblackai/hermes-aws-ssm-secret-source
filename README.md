@@ -8,7 +8,8 @@ before Hermes reads credentials. Bulk shape; on ECS it authenticates via the
 
 The use case: stop enumerating every secret in CloudFormation `secrets[]`
 (and redeploying for every rotation/new key). Put a parameter under the claw's
-SSM prefix, restart, and spawned sessions get it as an env var.
+SSM prefix, restart, and it's available as an env var at startup (the gateway
+and its sessions).
 
 > **Requires Hermes with [#64189](https://github.com/NousResearch/hermes-agent/pull/64189)**
 > ("re-pull plugin secret sources after discovery"). On older Hermes the plugin
@@ -16,7 +17,7 @@ SSM prefix, restart, and spawned sessions get it as an env var.
 > bootstrap-timing gap ([#64177](https://github.com/NousResearch/hermes-agent/issues/64177))
 > — so secrets won't reach the gateway / interactive sessions. Cron-triggered
 > sessions work even without #64189 (the scheduler re-pulls). On the BoldBlack
-> harness image this fix is backported until #64189 merges upstream.
+> harness image this fix is backported (shipped in **harness v1.9.3**) until #64189 merges upstream.
 
 ## Install
 
@@ -66,12 +67,16 @@ Sub-paths flatten: `/myclaw/db/PASSWORD` → `DB_PASSWORD`.
 
 ## Important caveats
 
-- **Bootstrap provider key stays in CFN/.env.** Provider routing is configured
-  at boot from the provider-key env var (cloud-mode config re-seed), which runs
-  *before* plugin discovery. So the one inference-provider key the gateway
-  boots on must still come from CloudFormation `secrets[]` or `.env`
-  (the `Enable{OpenRouter,Anthropic,Zai}Key` dance isn't removed by this plugin).
-  aws_ssm's value is **additional / rotated session-scoped keys** (no redeploy).
+- **All secrets can come from aws_ssm — including the bootstrap provider key.**
+  With #64189 the plugin resolves secrets at the first env load (re-pulled after
+  discovery), **before** the cloud-mode config re-seed reads the provider key, so
+  the gateway boots on the configured provider with the key pulled from SSM.
+  This means **all CloudFormation `secrets[]` are removable** — the
+  `Enable{OpenRouter,Anthropic,Zai}Key` "pick one provider at deploy" dance
+  included; adding or rotating a key is just an SSM write + restart, no redeploy.
+  The one exception is **`GH_TOKEN_VAL`**: the on-boot `gh auth login` runs in
+  the container `Command` *before* Hermes starts, so it must still come from CFN
+  / `.env` (or the gh-auth flow reworked).
 - **Env-var filtering still applies.** Provider-credential names on Hermes's
   `_HERMES_PROVIDER_ENV_BLOCKLIST` are stripped from subprocess (terminal /
   execute_code) envs. For a key used by a skill, name it to avoid the blocklist
