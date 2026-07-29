@@ -1,9 +1,10 @@
 manifest_version: 1
 name: aws_ssm
-version: 0.1.0
+version: "0.2.0"
 description: >
-  AWS SSM Parameter Store secret source. Resolves SSM parameters under a
-  configured path prefix into env vars at Hermes startup (bulk shape). On ECS
-  authenticates via the task role through the botocore credential chain.
+  AWS SSM Parameter Store secret source. Resolves individual SecureString
+  parameters into env vars at Hermes startup (mapped shape). Only explicitly
+  listed parameters are fetched. On ECS authenticates via the task role
+  through the botocore credential chain.
 author: BoldBlack
 license: MIT
