@@ -3,13 +3,28 @@
 An [Hermes Agent](https://hermes-agent.nousresearch.com) **secret source**
 plugin that resolves [AWS SSM Parameter Store](https://docs.aws.amazon.com/systems-manager/latest/userguide/systems-manager-parameter-store.html)
 secrets into environment variables at process startup — after `.env` loads,
-before Hermes reads credentials. Bulk shape; on ECS it authenticates via the
+before Hermes reads credentials. Mapped shape; on ECS it authenticates via the
 **task role**, so no explicit AWS credentials need to live in `.env`.
 
 The use case: stop enumerating every secret in CloudFormation `secrets[]`
-(and redeploying for every rotation/new key). Put a parameter under the claw's
-SSM prefix, restart, and it's available as an env var at startup (the gateway
-and its sessions).
+(and redeploying for every rotation/new key). Add a `SecureString` parameter,
+list it in `secrets.aws_ssm.env`, restart, and it's available as an env var at
+startup (the gateway and its sessions).
+
+## Security model
+
+- **Mapped only.** Only parameters explicitly listed in `secrets.aws_ssm.env`
+  are fetched. An SSM writer cannot inject arbitrary environment variables
+  (`PATH`, `HTTP_PROXY`, etc.) — the `env:` map *is* the allowlist.
+- **SecureString only.** Plaintext `String` and `StringList` parameters are
+  skipped with a warning. All secrets must be KMS-encrypted at rest.
+- **No path normalization.** Env-var names come from the `env:` map keys
+  (operator-chosen), not derived from SSM path structure. No collision or
+  ambiguity attacks are possible.
+
+> **Trust boundary:** write access to the configured SSM namespace is still
+> equivalent to credential-rotation authority. Restrict `ssm:PutParameter`
+> to a separate rotation role, never the Hermes task role.
 
 > **Requires Hermes with [#64189](https://github.com/NousResearch/hermes-agent/pull/64189)**
 > ("re-pull plugin secret sources after discovery"). On older Hermes the plugin
@@ -34,19 +49,23 @@ Add to `~/.hermes/config.yaml`:
 
 ```yaml
 secrets:
-  sources: [aws_ssm]        # ordered; bulk sources yield to mapped ones
+  sources: [aws_ssm]
   aws_ssm:
     enabled: true
-    path: /<claw-namespace>/   # e.g. /myclaw/ — the SSM prefix to resolve
-    region: ""                 # empty = botocore default chain (AWS_REGION / profile / task role)
-    recursive: true
     override_existing: true    # rotate centrally without a .env edit
+    region: ""                 # empty = botocore default chain (AWS_REGION / profile / task role)
+    env:
+      OPENROUTER_API_KEY: /myclaw/openrouter-key
+      ANTHROPIC_API_KEY: /myclaw/anthropic-key
+      OPENROUTER_IMAGE_API_KEY: /myclaw/openrouter-image-key
 ```
 
 Then restart the gateway.
 
-Parameter → env-var mapping: `/myclaw/OPENROUTER_API_KEY` → `OPENROUTER_API_KEY`.
-Sub-paths flatten: `/myclaw/db/PASSWORD` → `DB_PASSWORD`.
+Each `env:` entry maps an environment-variable name to an absolute SSM
+parameter path. Only `SecureString` parameters are accepted. Invalid names,
+empty values, non-SecureString types, and NUL-byte values are each skipped
+with a warning — the rest still resolve.
 
 ## Requirements
 
@@ -57,13 +76,23 @@ Sub-paths flatten: `/myclaw/db/PASSWORD` → `DB_PASSWORD`.
   **TaskRole** (not the ExecutionRole) needs:
   ```jsonc
   { "Effect": "Allow",
-    "Action": ["ssm:GetParameters", "ssm:GetParameter", "ssm:GetParametersByPath"],
+    "Action": "ssm:GetParameter",
     "Resource": "arn:aws:ssm:<region>:<account-id>:parameter/<claw-namespace>/*" },
   { "Effect": "Allow",
     "Action": "kms:Decrypt",
     "Resource": "<claw-ssm CMK ARN>",
-    "Condition": { "StringEquals": { "kms:ViaService": "ssm.<region>.amazonaws.com" } } }
+    "Condition": {
+      "StringEquals": {
+        "kms:ViaService": "ssm.<region>.amazonaws.com",
+        "kms:CallerAccount": "<account-id>"
+      },
+      "StringLike": {
+        "kms:EncryptionContext:PARAMETER_ARN": "arn:aws:ssm:<region>:<account-id>:parameter/<claw-namespace>/*"
+      }
+    } }
   ```
+  The IAM policy can scope `parameter/` resources to exactly the paths listed
+  in `env:` (or a prefix that covers them).
 
 ## Important caveats
 
