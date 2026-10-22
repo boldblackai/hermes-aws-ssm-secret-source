@@ -23,7 +23,7 @@ Repository = "https://github.com/boldblackai/hermes-aws-ssm-secret-source"
 Issues = "https://github.com/boldblackai/hermes-aws-ssm-secret-source/issues"
 
 [project.optional-dependencies]
-dev = ["pytest>=7", "ruff>=0.16", "ty>=0.0.1", "hermes-agent>=0.19", "boto3>=1.34"]
+dev = ["pytest>=7", "ruff>=0.16", "ty>=0.0.1", "hermes-agent>=0.19", "boto3>=1.34", "certifi>=2026.10.18"]
 
 # ── pytest ────────────────────────────────────────────────────────────
 [tool.pytest.ini_options]
@@ -41,3 +41,13 @@ select = ["E", "F", "I", "UP", "B", "SIM"]
 # ── uv ────────────────────────────────────────────────────────────────
 [tool.uv]
 exclude-newer = "5d"
+# CA-trust exemption (mirrors hermes-agent upstream): a release that revokes a
+# compromised CA must reach the lock the day it ships — holding it back keeps
+# the bad root trusted (GHSA-6q48-6c7w-9gw2, eMudhra root removal).
+exclude-newer-package = { certifi = false }
+
+# TEMPORARY override, remove when hermes-agent ships a release pinning
+# certifi >= 2026.10.18. Until then hermes-agent's exact `certifi==2026.5.20`
+# pin would pin the dev venv to the vulnerable bundle.
+override-dependencies = ["certifi>=2026.10.18"]
+
